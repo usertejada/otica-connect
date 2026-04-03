@@ -21,7 +21,7 @@ export interface Cliente {
   cidade: string;
   crm?: string;
   status: "ativo" | "inativo";
-  createdAt: string;
+  created_at: string;
 }
 
 export interface Produto {
@@ -37,19 +37,19 @@ export interface Produto {
 
 export interface Pedido {
   id: string;
-  clienteId: string;
-  clienteNome: string;
-  produtos: { produtoId: string; nome: string; quantidade: number; preco: number }[];
+  cliente_id: string;
+  cliente_nome: string;
+  produtos: { produto_id: string; nome: string; quantidade: number; preco: number }[];
   total: number;
   status: Status;
-  formaPagamento: "dinheiro" | "cartao_credito" | "cartao_debito" | "pix" | "parcelado";
-  createdAt: string;
+  forma_pagamento: "dinheiro" | "cartao_credito" | "cartao_debito" | "pix" | "parcelado";
+  created_at: string;
 }
 
 export interface Agendamento {
   id: string;
-  clienteId: string;
-  clienteNome: string;
+  cliente_id: string;
+  cliente_nome: string;
   data: string;
   hora: string;
   tipo: "consulta" | "entrega" | "ajuste" | "remoto";
@@ -59,17 +59,17 @@ export interface Agendamento {
 
 export interface Receita {
   id: string;
-  clienteId: string;
-  clienteNome: string;
+  cliente_id: string;
+  cliente_nome: string;
   medico?: string;
   data: string;
-  olhoDireito: {
+  olho_direito: {
     esferico: string;
     cilindrico: string;
     eixo: string;
     dnp: string;
   };
-  olhoEsquerdo: {
+  olho_esquerdo: {
     esferico: string;
     cilindrico: string;
     eixo: string;
@@ -81,15 +81,15 @@ export interface Receita {
 
 export interface Financeiro {
   id: string;
-  pedidoId?: string;
-  clienteNome: string;
+  pedido_id?: string;
+  cliente_nome: string;
   descricao: string;
   valor: number;
   tipo: "entrada" | "saida";
   status: "pago" | "pendente" | "atrasado";
   parcela?: string;
   vencimento: string;
-  createdAt: string;
+  created_at: string;
 }
 
 export interface Notificacao {
@@ -98,5 +98,5 @@ export interface Notificacao {
   descricao: string;
   tipo: "pedido" | "agendamento" | "estoque" | "financeiro";
   lida: boolean;
-  createdAt: string;
+  created_at: string;
 }

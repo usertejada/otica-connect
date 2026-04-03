@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
 import { motion } from "framer-motion";
 import {
   Users,
@@ -10,17 +12,23 @@ import {
   Pencil,
   AlertTriangle,
 } from "lucide-react";
-import { clientes, pedidos, produtos, agendamentos, financeiro } from "@/data/mock";
+import type { Cliente, Pedido, Produto, Agendamento, Financeiro } from "@/types";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function statusLabel(status: string) {
   const map: Record<string, string> = {
     pendente: "Pendente",
+    em_andamento: "Em Andamento",
     em_producao: "Em Produção",
     pronto: "Pronto",
     entregue: "Entregue",
     cancelado: "Cancelado",
+    pago: "Pago",
+    atrasado: "Atrasado",
+    agendado: "Agendado",
+    confirmado: "Confirmado",
+    concluido: "Concluído",
   };
   return map[status] ?? status;
 }
@@ -58,55 +66,103 @@ function formatCurrency(value: number) {
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-// ─── stat cards data ─────────────────────────────────────────────────────────
-
-const totalFaturamento = financeiro
-  .filter((f) => f.status === "pago")
-  .reduce((acc, f) => acc + f.valor, 0);
-
-const stats = [
-  {
-    label: "Clientes",
-    value: clientes.filter((c) => c.status === "ativo").length,
-    sub: `${clientes.length} no total`,
-    icon: Users,
-    iconClass: "bg-primary/10 text-primary",
-  },
-  {
-    label: "Pedidos",
-    value: pedidos.length,
-    sub: `${pedidos.filter((p) => p.status === "pronto").length} prontos`,
-    icon: ShoppingCart,
-    iconClass: "bg-accent/10 text-accent",
-  },
-  {
-    label: "Produtos",
-    value: produtos.filter((p) => p.status === "ativo").length,
-    sub: `${produtos.filter((p) => p.status === "em_falta").length} em falta`,
-    icon: Package,
-    iconClass: "bg-purple-100 text-purple-600",
-  },
-  {
-    label: "Faturamento",
-    value: formatCurrency(totalFaturamento),
-    sub: "pagamentos recebidos",
-    icon: DollarSign,
-    iconClass: "bg-amber-100 text-amber-600",
-  },
-  {
-    label: "Agendamentos",
-    value: agendamentos.filter((a) => a.status !== "cancelado").length,
-    sub: "nos próximos dias",
-    icon: Calendar,
-    iconClass: "bg-destructive/10 text-destructive",
-  },
-];
-
-const lowStock = produtos.filter((p) => p.estoque <= 3);
-
 // ─── component ───────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  const supabase = createClient();
+
+  const [clientes, setClientes] = useState<Cliente[]>([]);
+  const [pedidos, setPedidos] = useState<Pedido[]>([]);
+  const [produtos, setProdutos] = useState<Produto[]>([]);
+  const [agendamentos, setAgendamentos] = useState<Agendamento[]>([]);
+  const [financeiro, setFinanceiro] = useState<Financeiro[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  async function fetchDashboardData() {
+    setLoading(true);
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const [
+      { data: clientesData },
+      { data: pedidosData },
+      { data: produtosData },
+      { data: agendamentosData },
+      { data: financeiroData },
+    ] = await Promise.all([
+      supabase.from("clientes").select("*").order("created_at", { ascending: false }),
+      supabase.from("pedidos").select("*").order("created_at", { ascending: false }).limit(8),
+      supabase.from("produtos").select("*").order("nome", { ascending: true }),
+      supabase.from("agendamentos").select("*").neq("status", "cancelado").order("data", { ascending: true }).limit(5),
+      supabase.from("financeiro").select("*").order("created_at", { ascending: false }),
+    ]);
+
+    setClientes(clientesData ?? []);
+    setPedidos(pedidosData ?? []);
+    setProdutos(produtosData ?? []);
+    setAgendamentos(agendamentosData ?? []);
+    setFinanceiro(financeiroData ?? []);
+    setLoading(false);
+  }
+
+  // ── computed ──
+  const totalFaturamento = financeiro
+    .filter((f) => f.status === "pago" && f.tipo === "entrada")
+    .reduce((acc, f) => acc + f.valor, 0);
+
+  const lowStock = produtos.filter((p) => p.estoque <= 3);
+
+  const stats = [
+    {
+      label: "Clientes",
+      value: clientes.filter((c) => c.status === "ativo").length,
+      sub: `${clientes.length} no total`,
+      icon: Users,
+      iconClass: "bg-primary/10 text-primary",
+    },
+    {
+      label: "Pedidos",
+      value: pedidos.length,
+      sub: `${pedidos.filter((p) => p.status === "pronto").length} prontos`,
+      icon: ShoppingCart,
+      iconClass: "bg-accent/10 text-accent",
+    },
+    {
+      label: "Produtos",
+      value: produtos.filter((p) => p.status === "ativo").length,
+      sub: `${produtos.filter((p) => p.status === "em_falta").length} em falta`,
+      icon: Package,
+      iconClass: "bg-purple-100 text-purple-600",
+    },
+    {
+      label: "Faturamento",
+      value: formatCurrency(totalFaturamento),
+      sub: "pagamentos recebidos",
+      icon: DollarSign,
+      iconClass: "bg-amber-100 text-amber-600",
+    },
+    {
+      label: "Agendamentos",
+      value: agendamentos.length,
+      sub: "nos próximos dias",
+      icon: Calendar,
+      iconClass: "bg-destructive/10 text-destructive",
+    },
+  ];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <span className="w-6 h-6 border-2 border-border border-t-primary rounded-full animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
 
@@ -159,51 +215,58 @@ export default function DashboardPage() {
               Ver todos
             </a>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-muted/50 border-b border-border">
-                  <th className="px-4 py-3 text-left font-medium text-muted-foreground">Cliente</th>
-                  <th className="px-4 py-3 text-left font-medium text-muted-foreground hidden md:table-cell">Data</th>
-                  <th className="px-4 py-3 text-left font-medium text-muted-foreground">Total</th>
-                  <th className="px-4 py-3 text-left font-medium text-muted-foreground">Status</th>
-                  <th className="px-4 py-3 text-right font-medium text-muted-foreground">Ação</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {pedidos.map((pedido, i) => (
-                  <motion.tr
-                    key={pedido.id}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ delay: 0.4 + i * 0.05 }}
-                    className="hover:bg-muted/30 transition-colors"
-                  >
-                    <td className="px-4 py-3">
-                      <p className="font-medium text-foreground">{pedido.clienteNome}</p>
-                      <p className="text-xs text-muted-foreground">#{pedido.id}</p>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
-                      {formatDate(pedido.createdAt)}
-                    </td>
-                    <td className="px-4 py-3 font-medium text-foreground">
-                      {formatCurrency(pedido.total)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${statusClass(pedido.status)}`}>
-                        {statusLabel(pedido.status)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <button className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors">
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                    </td>
-                  </motion.tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+
+          {pedidos.length === 0 ? (
+            <p className="px-5 py-8 text-sm text-muted-foreground text-center">
+              Nenhum pedido encontrado.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-muted/50 border-b border-border">
+                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">Cliente</th>
+                    <th className="px-4 py-3 text-left font-medium text-muted-foreground hidden md:table-cell">Data</th>
+                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">Total</th>
+                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">Status</th>
+                    <th className="px-4 py-3 text-right font-medium text-muted-foreground">Ação</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {pedidos.map((pedido, i) => (
+                    <motion.tr
+                      key={pedido.id}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ delay: 0.4 + i * 0.05 }}
+                      className="hover:bg-muted/30 transition-colors"
+                    >
+                      <td className="px-4 py-3">
+                        <p className="font-medium text-foreground">{pedido.cliente_nome}</p>
+                        <p className="text-xs text-muted-foreground">#{pedido.id.slice(0, 8)}</p>
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
+                        {formatDate(pedido.created_at.split("T")[0])}
+                      </td>
+                      <td className="px-4 py-3 font-medium text-foreground">
+                        {formatCurrency(pedido.total)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${statusClass(pedido.status)}`}>
+                          {statusLabel(pedido.status)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors">
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </motion.tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </motion.div>
 
         {/* Right column */}
@@ -224,30 +287,37 @@ export default function DashboardPage() {
                 Ver todos
               </a>
             </div>
-            <div className="divide-y divide-border">
-              {agendamentos.map((ag, i) => (
-                <motion.div
-                  key={ag.id}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ delay: 0.45 + i * 0.05 }}
-                  className="flex items-center gap-3 px-5 py-3 hover:bg-muted/30 transition-colors"
-                >
-                  <div className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
-                    <Calendar className="w-4 h-4" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-foreground truncate">{ag.clienteNome}</p>
-                    <p className="text-[11px] text-muted-foreground">
-                      {formatDate(ag.data)} às {ag.hora} · {tipoLabel(ag.tipo)}
-                    </p>
-                  </div>
-                  <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full flex-shrink-0 ${statusClass(ag.status)}`}>
-                    {ag.status === "confirmado" ? "Confirmado" : "Agendado"}
-                  </span>
-                </motion.div>
-              ))}
-            </div>
+
+            {agendamentos.length === 0 ? (
+              <p className="px-5 py-6 text-sm text-muted-foreground text-center">
+                Nenhum agendamento.
+              </p>
+            ) : (
+              <div className="divide-y divide-border">
+                {agendamentos.map((ag, i) => (
+                  <motion.div
+                    key={ag.id}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.45 + i * 0.05 }}
+                    className="flex items-center gap-3 px-5 py-3 hover:bg-muted/30 transition-colors"
+                  >
+                    <div className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center flex-shrink-0">
+                      <Calendar className="w-4 h-4" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-foreground truncate">{ag.cliente_nome}</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        {formatDate(ag.data)} às {ag.hora} · {tipoLabel(ag.tipo)}
+                      </p>
+                    </div>
+                    <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full flex-shrink-0 ${statusClass(ag.status)}`}>
+                      {statusLabel(ag.status)}
+                    </span>
+                  </motion.div>
+                ))}
+              </div>
+            )}
           </motion.div>
 
           {/* Alerta de Estoque Baixo */}

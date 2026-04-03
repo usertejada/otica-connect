@@ -1,10 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Search, Plus, Pencil, Trash2, X, DollarSign, TrendingUp, TrendingDown, Clock } from "lucide-react";
-import { financeiro as mockFinanceiro, clientes } from "@/data/mock";
+import { createClient } from "@supabase/supabase-js";
 import { Financeiro } from "@/types/index";
+
+// ─── Supabase client ──────────────────────────────────────────────────────────
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -31,37 +38,50 @@ function formatCurrency(value: number) {
 
 const STATUS_OPTIONS = ["pago", "pendente", "atrasado"] as const;
 
+// ─── Tipos locais ─────────────────────────────────────────────────────────────
+
+interface ClienteOption {
+  id: string;
+  nome: string;
+}
+
 // ─── modal ───────────────────────────────────────────────────────────────────
 
 interface ModalProps {
   lancamento?: Financeiro | null;
+  clientes: ClienteOption[];
   onClose: () => void;
-  onSave: (data: Omit<Financeiro, "id" | "createdAt">) => void;
+  onSave: (data: Omit<Financeiro, "id" | "created_at">) => Promise<void>;
 }
 
-function FinanceiroModal({ lancamento, onClose, onSave }: ModalProps) {
+function FinanceiroModal({ lancamento, clientes, onClose, onSave }: ModalProps) {
   const hoje = new Date().toISOString().split("T")[0];
   const [form, setForm] = useState({
-    clienteNome: lancamento?.clienteNome ?? "",
+    cliente_nome: lancamento?.cliente_nome ?? "",
     descricao: lancamento?.descricao ?? "",
     valor: lancamento?.valor ?? 0,
     tipo: lancamento?.tipo ?? "entrada",
     status: lancamento?.status ?? "pendente",
     parcela: lancamento?.parcela ?? "",
     vencimento: lancamento?.vencimento ?? hoje,
+    pedido_id: lancamento?.pedido_id ?? undefined,
   });
+  const [saving, setSaving] = useState(false);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    onSave({
-      clienteNome: form.clienteNome,
+    setSaving(true);
+    await onSave({
+      cliente_nome: form.cliente_nome,
       descricao: form.descricao,
       valor: Number(form.valor),
       tipo: form.tipo as Financeiro["tipo"],
       status: form.status as Financeiro["status"],
       parcela: form.parcela || undefined,
       vencimento: form.vencimento,
+      pedido_id: form.pedido_id,
     });
+    setSaving(false);
   }
 
   const inputCls =
@@ -80,7 +100,11 @@ function FinanceiroModal({ lancamento, onClose, onSave }: ModalProps) {
           <h2 className="font-heading font-semibold text-base text-foreground">
             {lancamento ? "Editar Lançamento" : "Novo Lançamento"}
           </h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors opacity-70 hover:opacity-100">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="p-1.5 rounded-lg hover:bg-muted transition-colors opacity-70 hover:opacity-100 disabled:pointer-events-none"
+          >
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -92,8 +116,8 @@ function FinanceiroModal({ lancamento, onClose, onSave }: ModalProps) {
             <div className="sm:col-span-2 flex flex-col gap-1.5">
               <label className="text-sm font-medium text-foreground">Cliente</label>
               <select
-                value={form.clienteNome}
-                onChange={(e) => setForm({ ...form, clienteNome: e.target.value })}
+                value={form.cliente_nome}
+                onChange={(e) => setForm({ ...form, cliente_nome: e.target.value })}
                 className={inputCls}
               >
                 <option value="">Selecione um cliente</option>
@@ -183,11 +207,20 @@ function FinanceiroModal({ lancamento, onClose, onSave }: ModalProps) {
           </div>
 
           <div className="flex justify-end gap-2 pt-5">
-            <button type="button" onClick={onClose} className="h-9 px-4 rounded-lg border border-border text-sm font-medium text-foreground hover:bg-muted transition-colors">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="h-9 px-4 rounded-lg border border-border text-sm font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+            >
               Cancelar
             </button>
-            <button type="submit" className="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
-              {lancamento ? "Salvar alterações" : "Registrar"}
+            <button
+              type="submit"
+              disabled={saving}
+              className="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-70"
+            >
+              {saving ? "Salvando…" : lancamento ? "Salvar alterações" : "Registrar"}
             </button>
           </div>
         </form>
@@ -199,21 +232,62 @@ function FinanceiroModal({ lancamento, onClose, onSave }: ModalProps) {
 // ─── page ─────────────────────────────────────────────────────────────────────
 
 export default function FinanceiroPage() {
-  const [lancamentos, setLancamentos] = useState<Financeiro[]>(mockFinanceiro);
+  const [lancamentos, setLancamentos] = useState<Financeiro[]>([]);
+  const [clientes, setClientes] = useState<ClienteOption[]>([]);
   const [busca, setBusca] = useState("");
   const [filtroStatus, setFiltroStatus] = useState("todos");
   const [modalOpen, setModalOpen] = useState(false);
   const [editando, setEditando] = useState<Financeiro | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState<string | null>(null);
 
+  // ── Carrega dados do Supabase ────────────────────────────────────────────
+  useEffect(() => {
+    async function fetchData() {
+      setLoading(true);
+      setErro(null);
+
+      const { data: finData, error: finError } = await supabase
+        .from("financeiro")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (finError) {
+        setErro("Erro ao carregar lançamentos: " + finError.message);
+        setLoading(false);
+        return;
+      }
+
+      setLancamentos((finData ?? []) as Financeiro[]);
+
+      const { data: clientesData, error: clientesError } = await supabase
+        .from("clientes")
+        .select("id, nome")
+        .order("nome", { ascending: true });
+
+      if (clientesError) {
+        setErro("Erro ao carregar clientes: " + clientesError.message);
+        setLoading(false);
+        return;
+      }
+
+      setClientes((clientesData ?? []) as ClienteOption[]);
+      setLoading(false);
+    }
+
+    fetchData();
+  }, []);
+
+  // ── Filtros ──────────────────────────────────────────────────────────────
   const filtrados = lancamentos.filter((l) => {
     const matchBusca =
-      l.clienteNome.toLowerCase().includes(busca.toLowerCase()) ||
+      l.cliente_nome.toLowerCase().includes(busca.toLowerCase()) ||
       l.descricao.toLowerCase().includes(busca.toLowerCase());
     const matchStatus = filtroStatus === "todos" || l.status === filtroStatus;
     return matchBusca && matchStatus;
   });
 
-  // ── stat totals ──
+  // ── Totais ───────────────────────────────────────────────────────────────
   const totalRecebido = lancamentos
     .filter((l) => l.tipo === "entrada" && l.status === "pago")
     .reduce((acc, l) => acc + l.valor, 0);
@@ -226,24 +300,93 @@ export default function FinanceiroPage() {
     .filter((l) => l.status === "atrasado")
     .reduce((acc, l) => acc + l.valor, 0);
 
-  function handleSave(data: Omit<Financeiro, "id" | "createdAt">) {
+  // ── Salvar (criar ou editar) ─────────────────────────────────────────────
+  async function handleSave(data: Omit<Financeiro, "id" | "created_at">) {
     if (editando) {
-      setLancamentos((prev) =>
-        prev.map((l) => (l.id === editando.id ? { ...l, ...data } : l))
-      );
+      const { data: updated, error } = await supabase
+        .from("financeiro")
+        .update({
+          cliente_nome: data.cliente_nome,
+          descricao: data.descricao,
+          valor: data.valor,
+          tipo: data.tipo,
+          status: data.status,
+          parcela: data.parcela ?? null,
+          vencimento: data.vencimento,
+          pedido_id: data.pedido_id ?? null,
+        })
+        .eq("id", editando.id)
+        .select()
+        .single();
+
+      if (error) {
+        alert("Erro ao editar lançamento: " + error.message);
+        return;
+      }
+
+      if (updated) {
+        setLancamentos((prev) =>
+          prev.map((l) => (l.id === editando.id ? (updated as Financeiro) : l))
+        );
+      }
     } else {
-      const novo: Financeiro = {
-        ...data,
-        id: String(Date.now()),
-        createdAt: new Date().toISOString().split("T")[0],
-      };
-      setLancamentos((prev) => [novo, ...prev]);
+      const { data: inserted, error } = await supabase
+        .from("financeiro")
+        .insert([
+          {
+            cliente_nome: data.cliente_nome,
+            descricao: data.descricao,
+            valor: data.valor,
+            tipo: data.tipo,
+            status: data.status,
+            parcela: data.parcela ?? null,
+            vencimento: data.vencimento,
+            pedido_id: data.pedido_id ?? null,
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) {
+        alert("Erro ao registrar lançamento: " + error.message);
+        return;
+      }
+
+      if (inserted) {
+        setLancamentos((prev) => [inserted as Financeiro, ...prev]);
+      }
     }
+
     setModalOpen(false);
     setEditando(null);
   }
 
-  function handleDelete(id: string) {
+  // ── Atualizar status inline ──────────────────────────────────────────────
+  async function handleStatusChange(id: string, novoStatus: Financeiro["status"]) {
+    const { error } = await supabase
+      .from("financeiro")
+      .update({ status: novoStatus })
+      .eq("id", id);
+
+    if (error) {
+      alert("Erro ao atualizar status: " + error.message);
+      return;
+    }
+
+    setLancamentos((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, status: novoStatus } : l))
+    );
+  }
+
+  // ── Deletar ──────────────────────────────────────────────────────────────
+  async function handleDelete(id: string) {
+    const { error } = await supabase.from("financeiro").delete().eq("id", id);
+
+    if (error) {
+      alert("Erro ao deletar lançamento: " + error.message);
+      return;
+    }
+
     setLancamentos((prev) => prev.filter((l) => l.id !== id));
   }
 
@@ -252,30 +395,16 @@ export default function FinanceiroPage() {
     setModalOpen(true);
   }
 
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
 
       {/* ── Stat Cards ── */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[
-          {
-            label: "Total Recebido",
-            value: formatCurrency(totalRecebido),
-            icon: TrendingUp,
-            iconClass: "bg-green-100 text-green-600",
-          },
-          {
-            label: "A Receber",
-            value: formatCurrency(totalPendente),
-            icon: Clock,
-            iconClass: "bg-yellow-100 text-yellow-600",
-          },
-          {
-            label: "Em Atraso",
-            value: formatCurrency(totalAtrasado),
-            icon: TrendingDown,
-            iconClass: "bg-red-100 text-red-600",
-          },
+          { label: "Total Recebido", value: formatCurrency(totalRecebido), icon: TrendingUp, iconClass: "bg-green-100 text-green-600" },
+          { label: "A Receber", value: formatCurrency(totalPendente), icon: Clock, iconClass: "bg-yellow-100 text-yellow-600" },
+          { label: "Em Atraso", value: formatCurrency(totalAtrasado), icon: TrendingDown, iconClass: "bg-red-100 text-red-600" },
         ].map((stat, i) => {
           const Icon = stat.icon;
           return (
@@ -332,13 +461,30 @@ export default function FinanceiroPage() {
         </button>
       </div>
 
-      {/* ── Tabela ── */}
-      {filtrados.length === 0 ? (
+      {/* ── Loading ── */}
+      {loading && (
+        <div className="bg-card rounded-xl border border-border p-12 text-center">
+          <p className="text-muted-foreground text-sm">Carregando lançamentos…</p>
+        </div>
+      )}
+
+      {/* ── Erro ── */}
+      {erro && !loading && (
+        <div className="bg-destructive/10 rounded-xl border border-destructive/30 p-6 text-center">
+          <p className="text-destructive text-sm">{erro}</p>
+        </div>
+      )}
+
+      {/* ── Vazio ── */}
+      {!loading && !erro && filtrados.length === 0 && (
         <div className="bg-card rounded-xl border border-border p-12 text-center">
           <DollarSign className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
           <p className="text-muted-foreground text-sm">Nenhum lançamento encontrado.</p>
         </div>
-      ) : (
+      )}
+
+      {/* ── Tabela ── */}
+      {!loading && !erro && filtrados.length > 0 && (
         <div className="bg-card rounded-xl border border-border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -368,7 +514,7 @@ export default function FinanceiroPage() {
                         {l.tipo === "entrada" ? "Entrada" : "Saída"}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground">{l.clienteNome}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{l.cliente_nome}</td>
                     <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
                       {l.parcela ?? "—"}
                     </td>
@@ -381,15 +527,7 @@ export default function FinanceiroPage() {
                     <td className="px-4 py-3">
                       <select
                         value={l.status}
-                        onChange={(e) =>
-                          setLancamentos((prev) =>
-                            prev.map((item) =>
-                              item.id === l.id
-                                ? { ...item, status: e.target.value as Financeiro["status"] }
-                                : item
-                            )
-                          )
-                        }
+                        onChange={(e) => handleStatusChange(l.id, e.target.value as Financeiro["status"])}
                         className={`text-[11px] font-medium px-2 py-0.5 rounded-full border-0 cursor-pointer appearance-none focus:outline-none focus:ring-2 focus:ring-ring ${statusClass(l.status)}`}
                       >
                         {STATUS_OPTIONS.map((s) => (
@@ -425,6 +563,7 @@ export default function FinanceiroPage() {
         {modalOpen && (
           <FinanceiroModal
             lancamento={editando}
+            clientes={clientes}
             onClose={() => { setModalOpen(false); setEditando(null); }}
             onSave={handleSave}
           />

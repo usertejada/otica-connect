@@ -1,13 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Plus, Pencil, Trash2, X, Package } from "lucide-react";
-import { produtos as mockProdutos } from "@/data/mock";
+import { Search, Plus, Pencil, Trash2, X, Package, Loader2, AlertCircle } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 import { Produto } from "@/types/index";
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── Supabase client ──────────────────────────────────────────────────────────
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
+// ─── helpers ──────────────────────────────────────────────────────────────────
 function statusClass(status: string) {
   if (status === "ativo") return "bg-green-100 text-green-700";
   if (status === "em_falta") return "bg-red-100 text-red-700";
@@ -39,16 +44,39 @@ function formatCurrency(value: number) {
 
 const CATEGORIAS = ["armacao", "lente", "solar", "acessorio"] as const;
 
-// ─── modal ───────────────────────────────────────────────────────────────────
+type ProdutoForm = Omit<Produto, "id">;
 
+// ─── Toast ────────────────────────────────────────────────────────────────────
+function Toast({ message, type, onClose }: { message: string; type: "success" | "error"; onClose: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 3500);
+    return () => clearTimeout(t);
+  }, [onClose]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 40, scale: 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 20, scale: 0.95 }}
+      className={`fixed bottom-6 right-6 z-[100] flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg text-sm font-medium
+        ${type === "success" ? "bg-green-600 text-white" : "bg-destructive text-destructive-foreground"}`}
+    >
+      {type === "error" && <AlertCircle className="w-4 h-4 flex-shrink-0" />}
+      {message}
+    </motion.div>
+  );
+}
+
+// ─── Modal Criar/Editar ───────────────────────────────────────────────────────
 interface ModalProps {
   produto?: Produto | null;
   onClose: () => void;
-  onSave: (data: Omit<Produto, "id">) => void;
+  onSave: (data: ProdutoForm) => Promise<void>;
+  saving: boolean;
 }
 
-function ProdutoModal({ produto, onClose, onSave }: ModalProps) {
-  const [form, setForm] = useState({
+function ProdutoModal({ produto, onClose, onSave, saving }: ModalProps) {
+  const [form, setForm] = useState<ProdutoForm>({
     nome: produto?.nome ?? "",
     marca: produto?.marca ?? "",
     categoria: produto?.categoria ?? "armacao",
@@ -58,13 +86,13 @@ function ProdutoModal({ produto, onClose, onSave }: ModalProps) {
     status: produto?.status ?? "ativo",
   });
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    onSave({
+    await onSave({
       ...form,
       preco: Number(form.preco),
       estoque: Number(form.estoque),
-    } as Omit<Produto, "id">);
+    });
   }
 
   return (
@@ -83,7 +111,8 @@ function ProdutoModal({ produto, onClose, onSave }: ModalProps) {
           </h2>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-muted transition-colors opacity-70 hover:opacity-100"
+            disabled={saving}
+            className="p-1.5 rounded-lg hover:bg-muted transition-colors opacity-70 hover:opacity-100 disabled:pointer-events-none"
           >
             <X className="w-4 h-4" />
           </button>
@@ -132,9 +161,11 @@ function ProdutoModal({ produto, onClose, onSave }: ModalProps) {
 
             {/* Material */}
             <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium text-foreground">Material <span className="text-muted-foreground font-normal">(opcional)</span></label>
+              <label className="text-sm font-medium text-foreground">
+                Material <span className="text-muted-foreground font-normal">(opcional)</span>
+              </label>
               <input
-                value={form.material}
+                value={form.material ?? ""}
                 onChange={(e) => setForm({ ...form, material: e.target.value })}
                 placeholder="Ex: acetato, titânio"
                 className="h-10 px-3 rounded-md border border-input bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
@@ -188,14 +219,17 @@ function ProdutoModal({ produto, onClose, onSave }: ModalProps) {
             <button
               type="button"
               onClick={onClose}
-              className="h-9 px-4 rounded-lg border border-border text-sm font-medium text-foreground hover:bg-muted transition-colors"
+              disabled={saving}
+              className="h-9 px-4 rounded-lg border border-border text-sm font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+              disabled={saving}
+              className="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors flex items-center gap-2 disabled:opacity-70"
             >
+              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
               {produto ? "Salvar alterações" : "Cadastrar"}
             </button>
           </div>
@@ -205,57 +239,174 @@ function ProdutoModal({ produto, onClose, onSave }: ModalProps) {
   );
 }
 
-// ─── page ─────────────────────────────────────────────────────────────────────
+// ─── Modal Confirmar Delete ───────────────────────────────────────────────────
+function ConfirmModal({ nome, onConfirm, onCancel, deleting }: {
+  nome: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  deleting: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-card w-full max-w-sm rounded-xl shadow-2xl p-6 space-y-4"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center flex-shrink-0">
+            <Trash2 className="w-5 h-5 text-destructive" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-foreground text-sm">Excluir produto</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Esta ação não pode ser desfeita.</p>
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Tem certeza que deseja excluir <span className="font-medium text-foreground">{nome}</span>?
+        </p>
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            disabled={deleting}
+            className="h-9 px-4 rounded-lg border border-border text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={deleting}
+            className="h-9 px-4 rounded-lg bg-destructive text-destructive-foreground text-sm font-medium hover:bg-destructive/90 transition-colors flex items-center gap-2 disabled:opacity-70"
+          >
+            {deleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            Excluir
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
 
+// ─── Page ─────────────────────────────────────────────────────────────────────
 export default function ProdutosPage() {
-  const [produtos, setProdutos] = useState<Produto[]>(mockProdutos);
+  const [produtos, setProdutos] = useState<Produto[]>([]);
   const [busca, setBusca] = useState("");
   const [filtroCategoria, setFiltroCategoria] = useState("todos");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   const [modalOpen, setModalOpen] = useState(false);
   const [editando, setEditando] = useState<Produto | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<Produto | null>(null);
 
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+
+  // ── Fetch ──────────────────────────────────────────────────────────────────
+  const fetchProdutos = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("produtos")
+      .select("*")
+      .order("nome", { ascending: true });
+
+    if (error) {
+      showToast("Erro ao carregar produtos.", "error");
+    } else {
+      setProdutos(data ?? []);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchProdutos();
+  }, [fetchProdutos]);
+
+  // ── Realtime ───────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const channel = supabase
+      .channel("produtos-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "produtos" }, () => {
+        fetchProdutos();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchProdutos]);
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  function showToast(message: string, type: "success" | "error") {
+    setToast({ message, type });
+  }
+
+  // ── Filtro local ───────────────────────────────────────────────────────────
   const filtrados = produtos.filter((p) => {
+    const q = busca.toLowerCase();
     const matchBusca =
-      p.nome.toLowerCase().includes(busca.toLowerCase()) ||
-      p.marca.toLowerCase().includes(busca.toLowerCase());
+      p.nome.toLowerCase().includes(q) ||
+      p.marca.toLowerCase().includes(q);
     const matchCategoria =
       filtroCategoria === "todos" || p.categoria === filtroCategoria;
     return matchBusca && matchCategoria;
   });
 
-  function handleSave(data: Omit<Produto, "id">) {
-    if (editando) {
-      setProdutos((prev) =>
-        prev.map((p) => (p.id === editando.id ? { ...p, ...data } : p))
-      );
-    } else {
-      const novo: Produto = { ...data, id: String(Date.now()) };
-      setProdutos((prev) => [novo, ...prev]);
+  // ── Save (create / update) ─────────────────────────────────────────────────
+  async function handleSave(data: ProdutoForm) {
+    setSaving(true);
+    try {
+      if (editando) {
+        const { error } = await supabase
+          .from("produtos")
+          .update(data)
+          .eq("id", editando.id);
+
+        if (error) throw error;
+        showToast("Produto atualizado com sucesso!", "success");
+      } else {
+        const { error } = await supabase
+          .from("produtos")
+          .insert([data]);
+
+        if (error) throw error;
+        showToast("Produto cadastrado com sucesso!", "success");
+      }
+      setModalOpen(false);
+      setEditando(null);
+      fetchProdutos();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Erro desconhecido";
+      showToast(`Erro: ${msg}`, "error");
+    } finally {
+      setSaving(false);
     }
-    setModalOpen(false);
-    setEditando(null);
   }
 
-  function handleDelete(id: string) {
-    setProdutos((prev) => prev.filter((p) => p.id !== id));
+  // ── Delete ─────────────────────────────────────────────────────────────────
+  async function handleDelete() {
+    if (!confirmDelete) return;
+    setDeleting(true);
+    const { error } = await supabase
+      .from("produtos")
+      .delete()
+      .eq("id", confirmDelete.id);
+
+    if (error) {
+      showToast("Erro ao excluir produto.", "error");
+    } else {
+      showToast("Produto excluído.", "success");
+      fetchProdutos();
+    }
+    setDeleting(false);
+    setConfirmDelete(null);
   }
 
-  function openEdit(produto: Produto) {
-    setEditando(produto);
-    setModalOpen(true);
-  }
-
-  function openNew() {
-    setEditando(null);
-    setModalOpen(true);
-  }
-
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
 
-      {/* ── Toolbar ── */}
+      {/* Toolbar */}
       <div className="flex flex-col sm:flex-row gap-3">
-        {/* Busca */}
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
           <input
@@ -266,7 +417,6 @@ export default function ProdutosPage() {
           />
         </div>
 
-        {/* Filtro categoria */}
         <select
           value={filtroCategoria}
           onChange={(e) => setFiltroCategoria(e.target.value)}
@@ -278,9 +428,8 @@ export default function ProdutosPage() {
           ))}
         </select>
 
-        {/* Botão novo */}
         <button
-          onClick={openNew}
+          onClick={() => { setEditando(null); setModalOpen(true); }}
           className="flex items-center justify-center gap-2 h-10 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors w-full sm:w-auto"
         >
           <Plus className="w-4 h-4" />
@@ -288,13 +437,28 @@ export default function ProdutosPage() {
         </button>
       </div>
 
-      {/* ── Tabela ── */}
-      {filtrados.length === 0 ? (
+      {/* Loading */}
+      {loading && (
+        <div className="flex items-center justify-center py-20 text-muted-foreground">
+          <Loader2 className="w-6 h-6 animate-spin mr-2" />
+          <span className="text-sm">Carregando produtos…</span>
+        </div>
+      )}
+
+      {/* Empty */}
+      {!loading && filtrados.length === 0 && (
         <div className="bg-card rounded-xl border border-border p-12 text-center">
           <Package className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
-          <p className="text-muted-foreground text-sm">Nenhum produto encontrado.</p>
+          <p className="text-muted-foreground text-sm">
+            {busca || filtroCategoria !== "todos"
+              ? "Nenhum produto encontrado para esse filtro."
+              : "Nenhum produto cadastrado ainda."}
+          </p>
         </div>
-      ) : (
+      )}
+
+      {/* Tabela */}
+      {!loading && filtrados.length > 0 && (
         <div className="bg-card rounded-xl border border-border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -349,14 +513,14 @@ export default function ProdutosPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1 justify-end">
                         <button
-                          onClick={() => openEdit(produto)}
+                          onClick={() => { setEditando(produto); setModalOpen(true); }}
                           className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
                           aria-label="Editar"
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => handleDelete(produto.id)}
+                          onClick={() => setConfirmDelete(produto)}
                           className="p-1.5 rounded-lg hover:bg-destructive/10 text-destructive transition-colors"
                           aria-label="Deletar"
                         >
@@ -372,13 +536,37 @@ export default function ProdutosPage() {
         </div>
       )}
 
-      {/* ── Modal ── */}
+      {/* Modal Criar/Editar */}
       <AnimatePresence>
         {modalOpen && (
           <ProdutoModal
             produto={editando}
-            onClose={() => { setModalOpen(false); setEditando(null); }}
+            onClose={() => { if (!saving) { setModalOpen(false); setEditando(null); } }}
             onSave={handleSave}
+            saving={saving}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Modal Confirmar Delete */}
+      <AnimatePresence>
+        {confirmDelete && (
+          <ConfirmModal
+            nome={confirmDelete.nome}
+            onConfirm={handleDelete}
+            onCancel={() => setConfirmDelete(null)}
+            deleting={deleting}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Toast */}
+      <AnimatePresence>
+        {toast && (
+          <Toast
+            message={toast.message}
+            type={toast.type}
+            onClose={() => setToast(null)}
           />
         )}
       </AnimatePresence>

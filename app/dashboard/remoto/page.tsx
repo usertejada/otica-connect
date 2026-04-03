@@ -143,7 +143,7 @@ export default function RemotoPage() {
     <div className="space-y-4">
 
       {/* Card principal da videochamada */}
-      <div className="bg-card rounded-xl border border-border overflow-hidden">
+      <div className="bg-card rounded-xl border border-border overflow-hidden max-w-5xl">
 
         {/* Área de vídeo */}
         <div className="relative bg-[#080809] aspect-video w-full flex items-center justify-center overflow-hidden">

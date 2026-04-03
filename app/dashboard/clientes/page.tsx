@@ -1,13 +1,32 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Plus, Pencil, Trash2, X, User, Mail, Phone, MapPin } from "lucide-react";
-import { clientes as mockClientes } from "@/data/mock";
-import { Cliente } from "@/types/index";
+import { Search, Plus, Pencil, Trash2, X, User, Mail, Phone, MapPin, Loader2, AlertCircle } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
+
+// ─── Supabase client ──────────────────────────────────────────────────────────
+// Substitua pelas suas variáveis de ambiente
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+interface Cliente {
+  id: string;
+  nome: string;
+  email: string;
+  telefone: string;
+  cidade: string;
+  crm?: string;
+  status: "ativo" | "inativo";
+  created_at: string;
+}
+
+type ClienteForm = Omit<Cliente, "id" | "created_at">;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
-
 function statusClass(status: string) {
   return status === "ativo"
     ? "bg-green-100 text-green-700"
@@ -23,26 +42,48 @@ function getInitials(nome: string) {
     .toUpperCase();
 }
 
-// ─── modal ───────────────────────────────────────────────────────────────────
+// ─── Toast simples ────────────────────────────────────────────────────────────
+function Toast({ message, type, onClose }: { message: string; type: "success" | "error"; onClose: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 3500);
+    return () => clearTimeout(t);
+  }, [onClose]);
 
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 40, scale: 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 20, scale: 0.95 }}
+      className={`fixed bottom-6 right-6 z-[100] flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg text-sm font-medium
+        ${type === "success" ? "bg-green-600 text-white" : "bg-destructive text-destructive-foreground"}`}
+    >
+      {type === "error" && <AlertCircle className="w-4 h-4 flex-shrink-0" />}
+      {message}
+    </motion.div>
+  );
+}
+
+// ─── Modal ───────────────────────────────────────────────────────────────────
 interface ModalProps {
   cliente?: Cliente | null;
   onClose: () => void;
-  onSave: (data: Omit<Cliente, "id" | "createdAt">) => void;
+  onSave: (data: ClienteForm) => Promise<void>;
+  saving: boolean;
 }
 
-function ClienteModal({ cliente, onClose, onSave }: ModalProps) {
-  const [form, setForm] = useState({
+function ClienteModal({ cliente, onClose, onSave, saving }: ModalProps) {
+  const [form, setForm] = useState<ClienteForm>({
     nome: cliente?.nome ?? "",
     email: cliente?.email ?? "",
     telefone: cliente?.telefone ?? "",
     cidade: cliente?.cidade ?? "",
+    crm: cliente?.crm ?? "",
     status: cliente?.status ?? "ativo",
   });
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    onSave(form as Omit<Cliente, "id" | "createdAt">);
+    await onSave(form);
   }
 
   return (
@@ -61,7 +102,8 @@ function ClienteModal({ cliente, onClose, onSave }: ModalProps) {
           </h2>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-muted transition-colors opacity-70 hover:opacity-100"
+            disabled={saving}
+            className="p-1.5 rounded-lg hover:bg-muted transition-colors opacity-70 hover:opacity-100 disabled:pointer-events-none"
           >
             <X className="w-4 h-4" />
           </button>
@@ -116,6 +158,17 @@ function ClienteModal({ cliente, onClose, onSave }: ModalProps) {
               />
             </div>
 
+            {/* CRM */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm font-medium text-foreground">CRM <span className="text-muted-foreground font-normal">(opcional)</span></label>
+              <input
+                value={form.crm ?? ""}
+                onChange={(e) => setForm({ ...form, crm: e.target.value })}
+                placeholder="Ex: CRM-SP 123456"
+                className="h-10 px-3 rounded-md border border-input bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+            </div>
+
             {/* Status */}
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-medium text-foreground">Status</label>
@@ -135,14 +188,17 @@ function ClienteModal({ cliente, onClose, onSave }: ModalProps) {
             <button
               type="button"
               onClick={onClose}
-              className="h-9 px-4 rounded-lg border border-border text-sm font-medium text-foreground hover:bg-muted transition-colors"
+              disabled={saving}
+              className="h-9 px-4 rounded-lg border border-border text-sm font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+              disabled={saving}
+              className="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors flex items-center gap-2 disabled:opacity-70"
             >
+              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
               {cliente ? "Salvar alterações" : "Cadastrar"}
             </button>
           </div>
@@ -152,57 +208,172 @@ function ClienteModal({ cliente, onClose, onSave }: ModalProps) {
   );
 }
 
-// ─── page ─────────────────────────────────────────────────────────────────────
+// ─── Confirm Delete Modal ─────────────────────────────────────────────────────
+function ConfirmModal({ nome, onConfirm, onCancel, deleting }: {
+  nome: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  deleting: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-card w-full max-w-sm rounded-xl shadow-2xl p-6 space-y-4"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center flex-shrink-0">
+            <Trash2 className="w-5 h-5 text-destructive" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-foreground text-sm">Excluir cliente</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Esta ação não pode ser desfeita.</p>
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Tem certeza que deseja excluir <span className="font-medium text-foreground">{nome}</span>?
+        </p>
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            disabled={deleting}
+            className="h-9 px-4 rounded-lg border border-border text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={deleting}
+            className="h-9 px-4 rounded-lg bg-destructive text-destructive-foreground text-sm font-medium hover:bg-destructive/90 transition-colors flex items-center gap-2 disabled:opacity-70"
+          >
+            {deleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            Excluir
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
 
+// ─── Page ─────────────────────────────────────────────────────────────────────
 export default function ClientesPage() {
-  const [clientes, setClientes] = useState<Cliente[]>(mockClientes);
+  const [clientes, setClientes] = useState<Cliente[]>([]);
   const [busca, setBusca] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   const [modalOpen, setModalOpen] = useState(false);
   const [editando, setEditando] = useState<Cliente | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<Cliente | null>(null);
 
-  const filtrados = clientes.filter((c) =>
-    c.nome.toLowerCase().includes(busca.toLowerCase()) ||
-    c.email.toLowerCase().includes(busca.toLowerCase()) ||
-    c.cidade.toLowerCase().includes(busca.toLowerCase())
-  );
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
-  function handleSave(data: Omit<Cliente, "id" | "createdAt">) {
-    if (editando) {
-      setClientes((prev) =>
-        prev.map((c) => (c.id === editando.id ? { ...c, ...data } : c))
-      );
+  // ── Fetch ──────────────────────────────────────────────────────────────────
+  const fetchClientes = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("clientes")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      showToast("Erro ao carregar clientes.", "error");
     } else {
-      const novo: Cliente = {
-        ...data,
-        id: String(Date.now()),
-        createdAt: new Date().toISOString().split("T")[0],
-      };
-      setClientes((prev) => [novo, ...prev]);
+      setClientes(data ?? []);
     }
-    setModalOpen(false);
-    setEditando(null);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchClientes();
+  }, [fetchClientes]);
+
+  // ── Realtime (opcional) ────────────────────────────────────────────────────
+  useEffect(() => {
+    const channel = supabase
+      .channel("clientes-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "clientes" }, () => {
+        fetchClientes();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchClientes]);
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  function showToast(message: string, type: "success" | "error") {
+    setToast({ message, type });
   }
 
-  function handleDelete(id: string) {
-    setClientes((prev) => prev.filter((c) => c.id !== id));
+  // ── Save (create / update) ─────────────────────────────────────────────────
+  async function handleSave(data: ClienteForm) {
+    setSaving(true);
+    try {
+      if (editando) {
+        const { error } = await supabase
+          .from("clientes")
+          .update(data)
+          .eq("id", editando.id);
+
+        if (error) throw error;
+        showToast("Cliente atualizado com sucesso!", "success");
+      } else {
+        const { error } = await supabase
+          .from("clientes")
+          .insert([data]);
+
+        if (error) throw error;
+        showToast("Cliente cadastrado com sucesso!", "success");
+      }
+      setModalOpen(false);
+      setEditando(null);
+      fetchClientes();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Erro desconhecido";
+      showToast(`Erro: ${msg}`, "error");
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function openEdit(cliente: Cliente) {
-    setEditando(cliente);
-    setModalOpen(true);
+  // ── Delete ─────────────────────────────────────────────────────────────────
+  async function handleDelete() {
+    if (!confirmDelete) return;
+    setDeleting(true);
+    const { error } = await supabase
+      .from("clientes")
+      .delete()
+      .eq("id", confirmDelete.id);
+
+    if (error) {
+      showToast("Erro ao excluir cliente.", "error");
+    } else {
+      showToast("Cliente excluído.", "success");
+      fetchClientes();
+    }
+    setDeleting(false);
+    setConfirmDelete(null);
   }
 
-  function openNew() {
-    setEditando(null);
-    setModalOpen(true);
-  }
+  // ── Filtro local ───────────────────────────────────────────────────────────
+  const filtrados = clientes.filter((c) => {
+    const q = busca.toLowerCase();
+    return (
+      c.nome.toLowerCase().includes(q) ||
+      (c.email?.toLowerCase().includes(q) ?? false) ||
+      (c.cidade?.toLowerCase().includes(q) ?? false)
+    );
+  });
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
 
-      {/* ── Toolbar ── */}
+      {/* Toolbar */}
       <div className="flex flex-col sm:flex-row gap-3">
-        {/* Busca */}
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
           <input
@@ -212,10 +383,8 @@ export default function ClientesPage() {
             className="w-full pl-10 h-10 rounded-md border border-input bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
-
-        {/* Botão novo */}
         <button
-          onClick={openNew}
+          onClick={() => { setEditando(null); setModalOpen(true); }}
           className="flex items-center justify-center gap-2 h-10 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors w-full sm:w-auto"
         >
           <Plus className="w-4 h-4" />
@@ -223,23 +392,36 @@ export default function ClientesPage() {
         </button>
       </div>
 
-      {/* ── Grid de cards ── */}
-      {filtrados.length === 0 ? (
+      {/* Loading */}
+      {loading && (
+        <div className="flex items-center justify-center py-20 text-muted-foreground">
+          <Loader2 className="w-6 h-6 animate-spin mr-2" />
+          <span className="text-sm">Carregando clientes…</span>
+        </div>
+      )}
+
+      {/* Empty */}
+      {!loading && filtrados.length === 0 && (
         <div className="bg-card rounded-xl border border-border p-12 text-center">
           <User className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
-          <p className="text-muted-foreground text-sm">Nenhum cliente encontrado.</p>
+          <p className="text-muted-foreground text-sm">
+            {busca ? "Nenhum cliente encontrado para essa busca." : "Nenhum cliente cadastrado ainda."}
+          </p>
         </div>
-      ) : (
+      )}
+
+      {/* Grid */}
+      {!loading && filtrados.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtrados.map((cliente, i) => (
             <motion.div
               key={cliente.id}
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: i * 0.05 }}
+              transition={{ delay: i * 0.04 }}
               className="bg-card rounded-xl border border-border p-5 hover:shadow-lg transition-shadow duration-300 flex flex-col gap-4"
             >
-              {/* Top: avatar + nome + status */}
+              {/* Top */}
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-primary/10 text-primary font-bold text-sm flex items-center justify-center flex-shrink-0">
@@ -247,7 +429,9 @@ export default function ClientesPage() {
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-foreground leading-tight">{cliente.nome}</p>
-                    <p className="text-xs text-muted-foreground">desde {cliente.createdAt.split("-")[0]}</p>
+                    <p className="text-xs text-muted-foreground">
+                      desde {new Date(cliente.created_at).getFullYear()}
+                    </p>
                   </div>
                 </div>
                 <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${statusClass(cliente.status)}`}>
@@ -280,14 +464,14 @@ export default function ClientesPage() {
               {/* Actions */}
               <div className="flex items-center justify-end gap-1 pt-1 border-t border-border">
                 <button
-                  onClick={() => openEdit(cliente)}
+                  onClick={() => { setEditando(cliente); setModalOpen(true); }}
                   className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
                   aria-label="Editar"
                 >
                   <Pencil className="w-4 h-4" />
                 </button>
                 <button
-                  onClick={() => handleDelete(cliente.id)}
+                  onClick={() => setConfirmDelete(cliente)}
                   className="p-1.5 rounded-lg hover:bg-destructive/10 text-destructive transition-colors"
                   aria-label="Deletar"
                 >
@@ -299,13 +483,37 @@ export default function ClientesPage() {
         </div>
       )}
 
-      {/* ── Modal ── */}
+      {/* Modal Criar/Editar */}
       <AnimatePresence>
         {modalOpen && (
           <ClienteModal
             cliente={editando}
-            onClose={() => { setModalOpen(false); setEditando(null); }}
+            onClose={() => { if (!saving) { setModalOpen(false); setEditando(null); } }}
             onSave={handleSave}
+            saving={saving}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Modal Confirmar Delete */}
+      <AnimatePresence>
+        {confirmDelete && (
+          <ConfirmModal
+            nome={confirmDelete.nome}
+            onConfirm={handleDelete}
+            onCancel={() => setConfirmDelete(null)}
+            deleting={deleting}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Toast */}
+      <AnimatePresence>
+        {toast && (
+          <Toast
+            message={toast.message}
+            type={toast.type}
+            onClose={() => setToast(null)}
           />
         )}
       </AnimatePresence>

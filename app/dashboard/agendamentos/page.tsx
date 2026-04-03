@@ -1,18 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Plus, Pencil, Trash2, X, Calendar } from "lucide-react";
-import { agendamentos as mockAgendamentos, clientes } from "@/data/mock";
+import { Search, Plus, Pencil, Trash2, X, Calendar, Loader2, AlertCircle } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 import { Agendamento } from "@/types/index";
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── Supabase client ──────────────────────────────────────────────────────────
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
+// Tipo leve só para o select de clientes no modal
+type ClienteSelect = { id: string; nome: string };
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
 function statusClass(status: string) {
-  if (["agendado"].includes(status)) return "bg-yellow-100 text-yellow-700";
-  if (["confirmado"].includes(status)) return "bg-blue-100 text-blue-700";
-  if (["concluido"].includes(status)) return "bg-green-100 text-green-700";
-  if (["cancelado"].includes(status)) return "bg-red-100 text-red-700";
+  if (status === "agendado") return "bg-yellow-100 text-yellow-700";
+  if (status === "confirmado") return "bg-blue-100 text-blue-700";
+  if (status === "concluido") return "bg-green-100 text-green-700";
+  if (status === "cancelado") return "bg-red-100 text-red-700";
   return "bg-gray-100 text-gray-600";
 }
 
@@ -47,6 +55,7 @@ function tipoClass(tipo: string) {
 }
 
 function formatDate(dateStr: string) {
+  if (!dateStr) return "—";
   const [year, month, day] = dateStr.split("-");
   return `${day}/${month}/${year}`;
 }
@@ -54,18 +63,43 @@ function formatDate(dateStr: string) {
 const TIPOS = ["consulta", "entrega", "ajuste", "remoto"] as const;
 const STATUS_OPTIONS = ["agendado", "confirmado", "concluido", "cancelado"] as const;
 
-// ─── modal ───────────────────────────────────────────────────────────────────
+// ─── Toast ────────────────────────────────────────────────────────────────────
+function Toast({ message, type, onClose }: { message: string; type: "success" | "error"; onClose: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 3500);
+    return () => clearTimeout(t);
+  }, [onClose]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 40, scale: 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 20, scale: 0.95 }}
+      className={`fixed bottom-6 right-6 z-[100] flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg text-sm font-medium
+        ${type === "success" ? "bg-green-600 text-white" : "bg-destructive text-destructive-foreground"}`}
+    >
+      {type === "error" && <AlertCircle className="w-4 h-4 flex-shrink-0" />}
+      {message}
+    </motion.div>
+  );
+}
+
+// ─── Modal Criar/Editar ───────────────────────────────────────────────────────
+type AgendamentoForm = Omit<Agendamento, "id" | "created_at">;
 
 interface ModalProps {
   agendamento?: Agendamento | null;
+  clientes: ClienteSelect[];
   onClose: () => void;
-  onSave: (data: Omit<Agendamento, "id">) => void;
+  onSave: (data: AgendamentoForm) => Promise<void>;
+  saving: boolean;
 }
 
-function AgendamentoModal({ agendamento, onClose, onSave }: ModalProps) {
+function AgendamentoModal({ agendamento, clientes, onClose, onSave, saving }: ModalProps) {
   const hoje = new Date().toISOString().split("T")[0];
   const [form, setForm] = useState({
-    clienteId: agendamento?.clienteId ?? "",
+    cliente_id: agendamento?.cliente_id ?? "",
+    cliente_nome: agendamento?.cliente_nome ?? "",
     data: agendamento?.data ?? hoje,
     hora: agendamento?.hora ?? "09:00",
     tipo: agendamento?.tipo ?? "consulta",
@@ -73,13 +107,14 @@ function AgendamentoModal({ agendamento, onClose, onSave }: ModalProps) {
     observacao: agendamento?.observacao ?? "",
   });
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const cliente = clientes.find((c) => c.id === form.clienteId);
+    const cliente = clientes.find((c) => c.id === form.cliente_id);
     if (!cliente) return;
-    onSave({
-      clienteId: form.clienteId,
-      clienteNome: cliente.nome,
+
+    await onSave({
+      cliente_id: form.cliente_id,
+      cliente_nome: cliente.nome,
       data: form.data,
       hora: form.hora,
       tipo: form.tipo as Agendamento["tipo"],
@@ -104,7 +139,11 @@ function AgendamentoModal({ agendamento, onClose, onSave }: ModalProps) {
           <h2 className="font-heading font-semibold text-base text-foreground">
             {agendamento ? "Editar Agendamento" : "Novo Agendamento"}
           </h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors opacity-70 hover:opacity-100">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="p-1.5 rounded-lg hover:bg-muted transition-colors opacity-70 hover:opacity-100 disabled:pointer-events-none"
+          >
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -117,8 +156,8 @@ function AgendamentoModal({ agendamento, onClose, onSave }: ModalProps) {
               <label className="text-sm font-medium text-foreground">Cliente</label>
               <select
                 required
-                value={form.clienteId}
-                onChange={(e) => setForm({ ...form, clienteId: e.target.value })}
+                value={form.cliente_id}
+                onChange={(e) => setForm({ ...form, cliente_id: e.target.value })}
                 className={inputCls}
               >
                 <option value="">Selecione um cliente</option>
@@ -196,10 +235,20 @@ function AgendamentoModal({ agendamento, onClose, onSave }: ModalProps) {
           </div>
 
           <div className="flex justify-end gap-2 pt-5">
-            <button type="button" onClick={onClose} className="h-9 px-4 rounded-lg border border-border text-sm font-medium text-foreground hover:bg-muted transition-colors">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="h-9 px-4 rounded-lg border border-border text-sm font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+            >
               Cancelar
             </button>
-            <button type="submit" className="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
+            <button
+              type="submit"
+              disabled={saving}
+              className="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors flex items-center gap-2 disabled:opacity-70"
+            >
+              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
               {agendamento ? "Salvar alterações" : "Agendar"}
             </button>
           </div>
@@ -209,46 +258,181 @@ function AgendamentoModal({ agendamento, onClose, onSave }: ModalProps) {
   );
 }
 
-// ─── page ─────────────────────────────────────────────────────────────────────
+// ─── Modal Confirmar Delete ───────────────────────────────────────────────────
+function ConfirmModal({ nome, onConfirm, onCancel, deleting }: {
+  nome: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  deleting: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-card w-full max-w-sm rounded-xl shadow-2xl p-6 space-y-4"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center flex-shrink-0">
+            <Trash2 className="w-5 h-5 text-destructive" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-foreground text-sm">Excluir agendamento</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Esta ação não pode ser desfeita.</p>
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Tem certeza que deseja excluir o agendamento de{" "}
+          <span className="font-medium text-foreground">{nome}</span>?
+        </p>
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            disabled={deleting}
+            className="h-9 px-4 rounded-lg border border-border text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={deleting}
+            className="h-9 px-4 rounded-lg bg-destructive text-destructive-foreground text-sm font-medium hover:bg-destructive/90 transition-colors flex items-center gap-2 disabled:opacity-70"
+          >
+            {deleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            Excluir
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
 
+// ─── Page ─────────────────────────────────────────────────────────────────────
 export default function AgendamentosPage() {
-  const [agendamentos, setAgendamentos] = useState<Agendamento[]>(mockAgendamentos);
+  const [agendamentos, setAgendamentos] = useState<Agendamento[]>([]);
+  const [clientesLista, setClientesLista] = useState<ClienteSelect[]>([]);
+
   const [busca, setBusca] = useState("");
   const [filtroStatus, setFiltroStatus] = useState("todos");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   const [modalOpen, setModalOpen] = useState(false);
   const [editando, setEditando] = useState<Agendamento | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<Agendamento | null>(null);
 
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+
+  function showToast(message: string, type: "success" | "error") {
+    setToast({ message, type });
+  }
+
+  // ── Fetch agendamentos ─────────────────────────────────────────────────────
+  const fetchAgendamentos = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("agendamentos")
+      .select("*")
+      .order("data", { ascending: true })
+      .order("hora", { ascending: true });
+
+    if (error) {
+      showToast("Erro ao carregar agendamentos.", "error");
+    } else {
+      setAgendamentos(data ?? []);
+    }
+    setLoading(false);
+  }, []);
+
+  // ── Fetch clientes para o select do modal ──────────────────────────────────
+  const fetchClientes = useCallback(async () => {
+    const { data } = await supabase
+      .from("clientes")
+      .select("id, nome")
+      .eq("status", "ativo")
+      .order("nome");
+    setClientesLista(data ?? []);
+  }, []);
+
+  useEffect(() => {
+    fetchAgendamentos();
+    fetchClientes();
+  }, [fetchAgendamentos, fetchClientes]);
+
+  // ── Realtime ───────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const channel = supabase
+      .channel("agendamentos-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "agendamentos" }, () => {
+        fetchAgendamentos();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchAgendamentos]);
+
+  // ── Filtro local ───────────────────────────────────────────────────────────
   const filtrados = agendamentos.filter((a) => {
-    const matchBusca = a.clienteNome.toLowerCase().includes(busca.toLowerCase());
+    const matchBusca = a.cliente_nome.toLowerCase().includes(busca.toLowerCase());
     const matchStatus = filtroStatus === "todos" || a.status === filtroStatus;
     return matchBusca && matchStatus;
   });
 
-  function handleSave(data: Omit<Agendamento, "id">) {
-    if (editando) {
-      setAgendamentos((prev) =>
-        prev.map((a) => (a.id === editando.id ? { ...a, ...data } : a))
-      );
-    } else {
-      setAgendamentos((prev) => [{ ...data, id: String(Date.now()) }, ...prev]);
+  // ── Save ───────────────────────────────────────────────────────────────────
+  async function handleSave(data: AgendamentoForm) {
+    setSaving(true);
+    try {
+      if (editando) {
+        const { error } = await supabase
+          .from("agendamentos")
+          .update(data)
+          .eq("id", editando.id);
+        if (error) throw error;
+        showToast("Agendamento atualizado!", "success");
+      } else {
+        const { error } = await supabase
+          .from("agendamentos")
+          .insert([data]);
+        if (error) throw error;
+        showToast("Agendamento criado!", "success");
+      }
+      setModalOpen(false);
+      setEditando(null);
+      fetchAgendamentos();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Erro desconhecido";
+      showToast(`Erro: ${msg}`, "error");
+    } finally {
+      setSaving(false);
     }
-    setModalOpen(false);
-    setEditando(null);
   }
 
-  function handleDelete(id: string) {
-    setAgendamentos((prev) => prev.filter((a) => a.id !== id));
+  // ── Delete ─────────────────────────────────────────────────────────────────
+  async function handleDelete() {
+    if (!confirmDelete) return;
+    setDeleting(true);
+    const { error } = await supabase
+      .from("agendamentos")
+      .delete()
+      .eq("id", confirmDelete.id);
+
+    if (error) {
+      showToast("Erro ao excluir agendamento.", "error");
+    } else {
+      showToast("Agendamento excluído.", "success");
+      fetchAgendamentos();
+    }
+    setDeleting(false);
+    setConfirmDelete(null);
   }
 
-  function openEdit(ag: Agendamento) {
-    setEditando(ag);
-    setModalOpen(true);
-  }
-
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
 
-      {/* ── Toolbar ── */}
+      {/* Toolbar */}
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
@@ -280,13 +464,28 @@ export default function AgendamentosPage() {
         </button>
       </div>
 
-      {/* ── Grid de cards ── */}
-      {filtrados.length === 0 ? (
+      {/* Loading */}
+      {loading && (
+        <div className="flex items-center justify-center py-20 text-muted-foreground">
+          <Loader2 className="w-6 h-6 animate-spin mr-2" />
+          <span className="text-sm">Carregando agendamentos…</span>
+        </div>
+      )}
+
+      {/* Empty */}
+      {!loading && filtrados.length === 0 && (
         <div className="bg-card rounded-xl border border-border p-12 text-center">
           <Calendar className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
-          <p className="text-muted-foreground text-sm">Nenhum agendamento encontrado.</p>
+          <p className="text-muted-foreground text-sm">
+            {busca || filtroStatus !== "todos"
+              ? "Nenhum agendamento encontrado para esse filtro."
+              : "Nenhum agendamento cadastrado ainda."}
+          </p>
         </div>
-      ) : (
+      )}
+
+      {/* Grid de cards */}
+      {!loading && filtrados.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtrados.map((ag, i) => (
             <motion.div
@@ -299,7 +498,7 @@ export default function AgendamentosPage() {
               {/* Top */}
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <p className="text-sm font-semibold text-foreground leading-tight">{ag.clienteNome}</p>
+                  <p className="text-sm font-semibold text-foreground leading-tight">{ag.cliente_nome}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {formatDate(ag.data)} às {ag.hora}
                   </p>
@@ -329,14 +528,16 @@ export default function AgendamentosPage() {
               {/* Actions */}
               <div className="flex items-center justify-end gap-1 pt-1 border-t border-border">
                 <button
-                  onClick={() => openEdit(ag)}
+                  onClick={() => { setEditando(ag); setModalOpen(true); }}
                   className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
+                  aria-label="Editar"
                 >
                   <Pencil className="w-4 h-4" />
                 </button>
                 <button
-                  onClick={() => handleDelete(ag.id)}
+                  onClick={() => setConfirmDelete(ag)}
                   className="p-1.5 rounded-lg hover:bg-destructive/10 text-destructive transition-colors"
+                  aria-label="Deletar"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -346,12 +547,38 @@ export default function AgendamentosPage() {
         </div>
       )}
 
+      {/* Modal Criar/Editar */}
       <AnimatePresence>
         {modalOpen && (
           <AgendamentoModal
             agendamento={editando}
-            onClose={() => { setModalOpen(false); setEditando(null); }}
+            clientes={clientesLista}
+            onClose={() => { if (!saving) { setModalOpen(false); setEditando(null); } }}
             onSave={handleSave}
+            saving={saving}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Modal Confirmar Delete */}
+      <AnimatePresence>
+        {confirmDelete && (
+          <ConfirmModal
+            nome={confirmDelete.cliente_nome}
+            onConfirm={handleDelete}
+            onCancel={() => setConfirmDelete(null)}
+            deleting={deleting}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Toast */}
+      <AnimatePresence>
+        {toast && (
+          <Toast
+            message={toast.message}
+            type={toast.type}
+            onClose={() => setToast(null)}
           />
         )}
       </AnimatePresence>

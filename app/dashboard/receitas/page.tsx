@@ -1,10 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Search, Plus, Eye, Trash2, X, FileText } from "lucide-react";
-import { receitas as mockReceitas, clientes } from "@/data/mock";
+import { createClient } from "@supabase/supabase-js";
 import { Receita } from "@/types/index";
+
+// ─── Supabase client ──────────────────────────────────────────────────────────
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+// ─── Tipos locais ─────────────────────────────────────────────────────────────
+
+interface ClienteOption {
+  id: string;
+  nome: string;
+}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -13,7 +27,7 @@ function formatDate(dateStr: string) {
   return `${day}/${month}/${year}`;
 }
 
-// ─── modal visualizar ────────────────────────────────────────────────────────
+// ─── modal visualizar ─────────────────────────────────────────────────────────
 
 function ReceitaViewModal({
   receita,
@@ -31,11 +45,10 @@ function ReceitaViewModal({
         transition={{ type: "spring", damping: 25, stiffness: 300 }}
         className="bg-card w-full max-w-lg rounded-xl shadow-2xl max-h-[90vh] overflow-y-auto"
       >
-        {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div>
             <h2 className="font-heading font-semibold text-base text-foreground">
-              Receita — {receita.clienteNome}
+              Receita — {receita.cliente_nome}
             </h2>
             <p className="text-xs text-muted-foreground mt-0.5">
               {receita.medico && `Dr(a). ${receita.medico} · `}
@@ -51,7 +64,6 @@ function ReceitaViewModal({
         </div>
 
         <div className="p-6 space-y-5">
-          {/* Tabela graus */}
           <div className="overflow-x-auto">
             <table className="w-full text-sm border border-border rounded-lg overflow-hidden">
               <thead>
@@ -66,23 +78,22 @@ function ReceitaViewModal({
               <tbody className="divide-y divide-border">
                 <tr className="hover:bg-muted/30 transition-colors">
                   <td className="px-4 py-2.5 font-medium text-foreground">OD</td>
-                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olhoDireito.esferico}</td>
-                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olhoDireito.cilindrico}</td>
-                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olhoDireito.eixo}°</td>
-                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olhoDireito.dnp}</td>
+                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olho_direito.esferico}</td>
+                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olho_direito.cilindrico}</td>
+                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olho_direito.eixo}°</td>
+                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olho_direito.dnp}</td>
                 </tr>
                 <tr className="hover:bg-muted/30 transition-colors">
                   <td className="px-4 py-2.5 font-medium text-foreground">OE</td>
-                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olhoEsquerdo.esferico}</td>
-                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olhoEsquerdo.cilindrico}</td>
-                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olhoEsquerdo.eixo}°</td>
-                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olhoEsquerdo.dnp}</td>
+                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olho_esquerdo.esferico}</td>
+                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olho_esquerdo.cilindrico}</td>
+                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olho_esquerdo.eixo}°</td>
+                  <td className="px-4 py-2.5 text-center text-foreground">{receita.olho_esquerdo.dnp}</td>
                 </tr>
               </tbody>
             </table>
           </div>
 
-          {/* Adição */}
           {receita.adicao && (
             <div className="flex items-center justify-between bg-muted/40 rounded-lg px-4 py-3 border border-border">
               <span className="text-sm text-muted-foreground">Adição</span>
@@ -90,7 +101,6 @@ function ReceitaViewModal({
             </div>
           )}
 
-          {/* Observação */}
           {receita.observacao && (
             <div className="space-y-1.5">
               <p className="text-sm font-medium text-foreground">Observação</p>
@@ -117,7 +127,7 @@ function ReceitaViewModal({
 // ─── modal cadastro ───────────────────────────────────────────────────────────
 
 interface FormState {
-  clienteId: string;
+  cliente_id: string;
   medico: string;
   data: string;
   odEsferico: string;
@@ -133,15 +143,17 @@ interface FormState {
 }
 
 function ReceitaFormModal({
+  clientes,
   onClose,
   onSave,
 }: {
+  clientes: ClienteOption[];
   onClose: () => void;
-  onSave: (data: Omit<Receita, "id">) => void;
+  onSave: (data: Omit<Receita, "id">) => Promise<void>;
 }) {
   const hoje = new Date().toISOString().split("T")[0];
   const [form, setForm] = useState<FormState>({
-    clienteId: "",
+    cliente_id: "",
     medico: "",
     data: hoje,
     odEsferico: "",
@@ -155,28 +167,30 @@ function ReceitaFormModal({
     adicao: "",
     observacao: "",
   });
+  const [saving, setSaving] = useState(false);
 
   function set(field: keyof FormState, value: string) {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const cliente = clientes.find((c) => c.id === form.clienteId);
+    const cliente = clientes.find((c) => c.id === form.cliente_id);
     if (!cliente) return;
 
-    onSave({
-      clienteId: form.clienteId,
-      clienteNome: cliente.nome,
+    setSaving(true);
+    await onSave({
+      cliente_id: form.cliente_id,
+      cliente_nome: cliente.nome,
       medico: form.medico || undefined,
       data: form.data,
-      olhoDireito: {
+      olho_direito: {
         esferico: form.odEsferico,
         cilindrico: form.odCilindrico,
         eixo: form.odEixo,
         dnp: form.odDnp,
       },
-      olhoEsquerdo: {
+      olho_esquerdo: {
         esferico: form.oeEsferico,
         cilindrico: form.oeCilindrico,
         eixo: form.oeEixo,
@@ -185,6 +199,7 @@ function ReceitaFormModal({
       adicao: form.adicao || undefined,
       observacao: form.observacao || undefined,
     });
+    setSaving(false);
   }
 
   const inputCls =
@@ -199,7 +214,6 @@ function ReceitaFormModal({
         transition={{ type: "spring", damping: 25, stiffness: 300 }}
         className="bg-card w-full max-w-2xl rounded-xl shadow-2xl max-h-[90vh] overflow-y-auto"
       >
-        {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h2 className="font-heading font-semibold text-base text-foreground">
             Nova Receita
@@ -213,15 +227,14 @@ function ReceitaFormModal({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
-
           {/* Cliente + Médico + Data */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="sm:col-span-2 flex flex-col gap-1.5">
               <label className="text-sm font-medium text-foreground">Cliente</label>
               <select
                 required
-                value={form.clienteId}
-                onChange={(e) => set("clienteId", e.target.value)}
+                value={form.cliente_id}
+                onChange={(e) => set("cliente_id", e.target.value)}
                 className={inputCls}
               >
                 <option value="">Selecione um cliente</option>
@@ -346,9 +359,10 @@ function ReceitaFormModal({
             </button>
             <button
               type="submit"
-              className="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+              disabled={saving}
+              className="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
             >
-              Salvar receita
+              {saving ? "Salvando…" : "Salvar receita"}
             </button>
           </div>
         </form>
@@ -360,27 +374,102 @@ function ReceitaFormModal({
 // ─── page ─────────────────────────────────────────────────────────────────────
 
 export default function ReceitasPage() {
-  const [receitas, setReceitas] = useState<Receita[]>(mockReceitas);
+  const [receitas, setReceitas] = useState<Receita[]>([]);
+  const [clientes, setClientes] = useState<ClienteOption[]>([]);
   const [busca, setBusca] = useState("");
   const [modalForm, setModalForm] = useState(false);
   const [visualizando, setVisualizando] = useState<Receita | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState<string | null>(null);
 
+  // ── Carrega receitas e clientes do Supabase ──────────────────────────────
+  useEffect(() => {
+    async function fetchData() {
+      setLoading(true);
+      setErro(null);
+
+      const { data: receitasData, error: receitasError } = await supabase
+        .from("receitas")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (receitasError) {
+        setErro("Erro ao carregar receitas: " + receitasError.message);
+        setLoading(false);
+        return;
+      }
+
+      setReceitas((receitasData ?? []) as Receita[]);
+
+      const { data: clientesData, error: clientesError } = await supabase
+        .from("clientes")
+        .select("id, nome")
+        .order("nome", { ascending: true });
+
+      if (clientesError) {
+        setErro("Erro ao carregar clientes: " + clientesError.message);
+        setLoading(false);
+        return;
+      }
+
+      setClientes((clientesData ?? []) as ClienteOption[]);
+      setLoading(false);
+    }
+
+    fetchData();
+  }, []);
+
+  // ── Filtro de busca ──────────────────────────────────────────────────────
   const filtradas = receitas.filter(
     (r) =>
-      r.clienteNome.toLowerCase().includes(busca.toLowerCase()) ||
+      r.cliente_nome.toLowerCase().includes(busca.toLowerCase()) ||
       (r.medico?.toLowerCase().includes(busca.toLowerCase()) ?? false)
   );
 
-  function handleSave(data: Omit<Receita, "id">) {
-    const nova: Receita = { ...data, id: String(Date.now()) };
-    setReceitas((prev) => [nova, ...prev]);
+  // ── Salvar nova receita no Supabase ──────────────────────────────────────
+  async function handleSave(data: Omit<Receita, "id">) {
+    const { data: inserted, error } = await supabase
+      .from("receitas")
+      .insert([
+        {
+          cliente_id: data.cliente_id,
+          cliente_nome: data.cliente_nome,
+          medico: data.medico ?? null,
+          data: data.data,
+          olho_direito: data.olho_direito,
+          olho_esquerdo: data.olho_esquerdo,
+          adicao: data.adicao ?? null,
+          observacao: data.observacao ?? null,
+        },
+      ])
+      .select()
+      .single();
+
+    if (error) {
+      alert("Erro ao salvar receita: " + error.message);
+      return;
+    }
+
+    if (inserted) {
+      setReceitas((prev) => [inserted as Receita, ...prev]);
+    }
+
     setModalForm(false);
   }
 
-  function handleDelete(id: string) {
+  // ── Deletar receita no Supabase ──────────────────────────────────────────
+  async function handleDelete(id: string) {
+    const { error } = await supabase.from("receitas").delete().eq("id", id);
+
+    if (error) {
+      alert("Erro ao deletar receita: " + error.message);
+      return;
+    }
+
     setReceitas((prev) => prev.filter((r) => r.id !== id));
   }
 
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
 
@@ -404,13 +493,30 @@ export default function ReceitasPage() {
         </button>
       </div>
 
-      {/* ── Grid de cards ── */}
-      {filtradas.length === 0 ? (
+      {/* ── Loading ── */}
+      {loading && (
+        <div className="bg-card rounded-xl border border-border p-12 text-center">
+          <p className="text-muted-foreground text-sm">Carregando receitas…</p>
+        </div>
+      )}
+
+      {/* ── Erro ── */}
+      {erro && !loading && (
+        <div className="bg-destructive/10 rounded-xl border border-destructive/30 p-6 text-center">
+          <p className="text-destructive text-sm">{erro}</p>
+        </div>
+      )}
+
+      {/* ── Vazio ── */}
+      {!loading && !erro && filtradas.length === 0 && (
         <div className="bg-card rounded-xl border border-border p-12 text-center">
           <FileText className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
           <p className="text-muted-foreground text-sm">Nenhuma receita encontrada.</p>
         </div>
-      ) : (
+      )}
+
+      {/* ── Grid de cards ── */}
+      {!loading && !erro && filtradas.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtradas.map((receita, i) => (
             <motion.div
@@ -424,7 +530,7 @@ export default function ReceitasPage() {
               <div className="flex items-start justify-between">
                 <div>
                   <p className="text-sm font-semibold text-foreground leading-tight">
-                    {receita.clienteNome}
+                    {receita.cliente_nome}
                   </p>
                   {receita.medico && (
                     <p className="text-xs text-muted-foreground mt-0.5">
@@ -440,8 +546,8 @@ export default function ReceitasPage() {
               {/* Graus resumidos */}
               <div className="grid grid-cols-2 gap-2">
                 {[
-                  { label: "OD", data: receita.olhoDireito },
-                  { label: "OE", data: receita.olhoEsquerdo },
+                  { label: "OD", data: receita.olho_direito },
+                  { label: "OE", data: receita.olho_esquerdo },
                 ].map(({ label, data }) => (
                   <div key={label} className="bg-muted/40 rounded-lg p-3 border border-border">
                     <p className="text-[11px] font-semibold text-muted-foreground mb-1.5">{label}</p>
@@ -492,6 +598,7 @@ export default function ReceitasPage() {
       <AnimatePresence>
         {modalForm && (
           <ReceitaFormModal
+            clientes={clientes}
             onClose={() => setModalForm(false)}
             onSave={handleSave}
           />
