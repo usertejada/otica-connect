@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { notificacoes } from "@/data/mock";
+import type { Notificacao } from "@/types";
 
 interface HeaderProps {
   title: string;
@@ -34,36 +34,41 @@ export function Header({ title, onMenuClick }: HeaderProps) {
   const supabase = createClient();
 
   const [notifOpen, setNotifOpen] = useState(false);
-  const [notifs, setNotifs] = useState(notificacoes);
+  const [notifs, setNotifs] = useState<Notificacao[]>([]);
   const [nome, setNome] = useState("");
   const [email, setEmail] = useState("");
   const notifRef = useRef<HTMLDivElement>(null);
 
   const unread = notifs.filter((n) => !n.lida).length;
 
-  // Busca dados do usuário logado
-useEffect(() => {
-  async function fetchUser() {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+  useEffect(() => {
+    async function fetchUser() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
-    setEmail(user.email ?? "");
+      setEmail(user.email ?? "");
 
-    // Tenta pegar nome dos metadados primeiro (mais rápido)
-    const nomeMetadata = user.user_metadata?.nome;
-    if (nomeMetadata) setNome(nomeMetadata);
+      const nomeMetadata = user.user_metadata?.nome;
+      if (nomeMetadata) setNome(nomeMetadata);
 
-    // Depois confirma com o perfil do banco
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("nome")
-      .eq("id", user.id)
-      .single();
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("nome")
+        .eq("id", user.id)
+        .single();
 
-    if (profile?.nome) setNome(profile.nome);
-  }
-  fetchUser();
-}, []);
+      if (profile?.nome) setNome(profile.nome);
+
+      const { data: notifData } = await supabase
+        .from("notificacoes")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(10);
+
+      setNotifs(notifData ?? []);
+    }
+    fetchUser();
+  }, []);
 
   // Fecha notificações ao clicar fora
   useEffect(() => {
@@ -76,8 +81,12 @@ useEffect(() => {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  function markAllRead() {
+  async function markAllRead() {
     setNotifs((prev) => prev.map((n) => ({ ...n, lida: true })));
+    await supabase
+      .from("notificacoes")
+      .update({ lida: true })
+      .eq("lida", false);
   }
 
   async function handleLogout() {
@@ -85,7 +94,6 @@ useEffect(() => {
     router.push("/login");
   }
 
-  // Gera iniciais do nome para o avatar
   const iniciais = nome
     ? nome.split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase()
     : "?";
@@ -143,24 +151,30 @@ useEffect(() => {
                 </button>
               </div>
               <div className="max-h-80 overflow-y-auto">
-                {notifs.map((notif) => {
-                  const Icon = notifIcons[notif.tipo] ?? Bell;
-                  const colorClass = notifColors[notif.tipo] ?? "bg-muted text-muted-foreground";
-                  return (
-                    <div key={notif.id} className="flex items-start gap-3 px-4 py-3 hover:bg-muted/50 transition-colors cursor-pointer">
-                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${colorClass}`}>
-                        <Icon className="w-4 h-4" />
+                {notifs.length === 0 ? (
+                  <p className="px-4 py-6 text-sm text-muted-foreground text-center">
+                    Nenhuma notificação.
+                  </p>
+                ) : (
+                  notifs.map((notif) => {
+                    const Icon = notifIcons[notif.tipo] ?? Bell;
+                    const colorClass = notifColors[notif.tipo] ?? "bg-muted text-muted-foreground";
+                    return (
+                      <div key={notif.id} className="flex items-start gap-3 px-4 py-3 hover:bg-muted/50 transition-colors cursor-pointer">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${colorClass}`}>
+                          <Icon className="w-4 h-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-foreground leading-snug">{notif.titulo}</p>
+                          <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{notif.descricao}</p>
+                        </div>
+                        {!notif.lida && (
+                          <span className="w-2 h-2 bg-primary rounded-full flex-shrink-0 mt-1" />
+                        )}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-semibold text-foreground leading-snug">{notif.titulo}</p>
-                        <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{notif.descricao}</p>
-                      </div>
-                      {!notif.lida && (
-                        <span className="w-2 h-2 bg-primary rounded-full flex-shrink-0 mt-1" />
-                      )}
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                )}
               </div>
               <div className="px-4 py-2 border-t border-border">
                 <button
