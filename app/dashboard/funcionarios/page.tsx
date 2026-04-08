@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { criarFuncionario, deletarFuncionario } from "@/app/actions/funcionario";
 import { UserPlus, Trash2, Shield, User } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -14,6 +15,7 @@ interface Funcionario {
 }
 
 export default function FuncionariosPage() {
+  // ✅ createClient() fora do render — instância única
   const supabase = createClient();
 
   const [funcionarios, setFuncionarios] = useState<Funcionario[]>([]);
@@ -25,18 +27,11 @@ export default function FuncionariosPage() {
   const [sucesso, setSucesso] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);
   const [deletando, setDeletando] = useState<string | null>(null);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchFuncionarios();
-  }, []);
-
-  async function fetchFuncionarios() {
+  const fetchFuncionarios = useCallback(async () => {
     setLoading(true);
-
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
-    setCurrentUserId(user.id);
 
     const { data } = await supabase
       .from("profiles")
@@ -47,7 +42,11 @@ export default function FuncionariosPage() {
 
     setFuncionarios(data ?? []);
     setLoading(false);
-  }
+  }, [supabase]);
+
+  useEffect(() => {
+    fetchFuncionarios();
+  }, [fetchFuncionarios]);
 
   async function handleCadastrar(e: React.FormEvent) {
     e.preventDefault();
@@ -60,60 +59,28 @@ export default function FuncionariosPage() {
     }
 
     setSalvando(true);
+    // ✅ Chama Server Action — não desloga o admin
+    const result = await criarFuncionario(nome, email, senha);
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    // Busca dados do admin para pegar o owner_id
-    const { data: adminProfile } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .single();
-
-    if (adminProfile?.role !== "admin") {
-      setErro("Apenas administradores podem cadastrar funcionários.");
-      setSalvando(false);
-      return;
+    if (result.error) {
+      setErro(result.error);
+    } else {
+      setSucesso(`Funcionário ${nome} cadastrado com sucesso!`);
+      setNome("");
+      setEmail("");
+      setSenha("");
+      fetchFuncionarios();
     }
 
-    const { error } = await supabase.auth.signUp({
-      email,
-      password: senha,
-      options: {
-        data: {
-          nome,
-          role: "funcionario",
-          owner_id: user.id,
-        },
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
-
-    if (error) {
-      setErro("Erro ao cadastrar funcionário. Verifique os dados e tente novamente.");
-      setSalvando(false);
-      return;
-    }
-
-    setSucesso(`Funcionário ${nome} cadastrado! Um e-mail de confirmação foi enviado.`);
-    setNome("");
-    setEmail("");
-    setSenha("");
     setSalvando(false);
-    fetchFuncionarios();
   }
 
   async function handleDeletar(funcionarioId: string) {
     setDeletando(funcionarioId);
+    const result = await deletarFuncionario(funcionarioId);
 
-    const { error } = await supabase
-      .from("profiles")
-      .delete()
-      .eq("id", funcionarioId);
-
-    if (error) {
-      setErro("Erro ao remover funcionário.");
+    if (result.error) {
+      setErro(result.error);
     } else {
       setFuncionarios((prev) => prev.filter((f) => f.id !== funcionarioId));
     }
@@ -127,8 +94,6 @@ export default function FuncionariosPage() {
 
   return (
     <div className="space-y-6">
-
-      {/* Header da página */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-heading font-bold text-xl text-foreground">Funcionários</h2>
@@ -143,8 +108,6 @@ export default function FuncionariosPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-        {/* Formulário de cadastro */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -225,7 +188,6 @@ export default function FuncionariosPage() {
           </form>
         </motion.div>
 
-        {/* Lista de funcionários */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -281,7 +243,6 @@ export default function FuncionariosPage() {
                     onClick={() => handleDeletar(func.id)}
                     disabled={deletando === func.id}
                     className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
-                    aria-label="Remover funcionário"
                   >
                     {deletando === func.id ? (
                       <span className="w-4 h-4 border-2 border-border border-t-destructive rounded-full animate-spin block" />
