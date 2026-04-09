@@ -2,11 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-<<<<<<< HEAD
-import { criarFuncionario, deletarFuncionario } from "@/app/actions/funcionario";
-=======
 import { criarFuncionario, deletarFuncionario } from "@/app/actions/funcionarios";
->>>>>>> 4f1a521 (mais uma atualização no aba funcionarios)
 import { UserPlus, Trash2, Shield, User } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
